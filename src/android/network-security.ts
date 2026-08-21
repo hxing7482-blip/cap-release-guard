@@ -14,10 +14,32 @@ interface AttributeValue {
   index: number;
 }
 
+interface XmlElement {
+  name: string;
+  attributes: Map<string, string>;
+  children: XmlElement[];
+  directText: string[];
+  index: number;
+}
+
+interface StartTag {
+  name: string;
+  attributes: Map<string, string>;
+  selfClosing: boolean;
+}
+
 const manifestRelativePaths = {
   main: 'android/app/src/main/AndroidManifest.xml',
   release: 'android/app/src/release/AndroidManifest.xml',
 } as const;
+
+const predefinedEntities = new Map([
+  ['amp', '&'],
+  ['apos', "'"],
+  ['gt', '>'],
+  ['lt', '<'],
+  ['quot', '"'],
+]);
 
 function lineAt(content: string, index: number): number {
   return content.slice(0, index).split('\n').length;
@@ -42,23 +64,196 @@ function applicationAttribute(document: XmlDocument, name: string): AttributeVal
   return { value: attribute[1].trim(), index: application.index + attribute.index };
 }
 
-function maskXmlSection(value: string): string {
-  return value.replace(/[^\r\n]/g, ' ');
+function isXmlNameStart(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z_:]/.test(character);
 }
 
-function analyzableXml(content: string): { content: string; hasDebugOverrides: boolean } {
-  const withoutComments = content.replace(/<!--[\s\S]*?-->/g, maskXmlSection);
-  const debugExpression = /<debug-overrides\b[^>]*(?:\/>|>[\s\S]*?<\/debug-overrides\s*>)/gi;
-  const hasDebugOverrides = debugExpression.test(withoutComments);
-  debugExpression.lastIndex = 0;
-  return {
-    content: withoutComments.replace(debugExpression, maskXmlSection),
-    hasDebugOverrides,
-  };
+function isXmlNameCharacter(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z0-9_.:-]/.test(character);
 }
 
-function cleartextAttribute(tag: string): boolean {
-  return /\bcleartextTrafficPermitted\s*=\s*["']true["']/i.test(tag);
+function readXmlName(value: string, start: number): { name: string; end: number } {
+  if (!isXmlNameStart(value[start])) throw new Error('Invalid XML name.');
+  let end = start + 1;
+  while (isXmlNameCharacter(value[end])) end += 1;
+  return { name: value.slice(start, end), end };
+}
+
+function skipWhitespace(value: string, start: number): number {
+  let cursor = start;
+  while (/\s/.test(value[cursor] ?? '')) cursor += 1;
+  return cursor;
+}
+
+function decodePredefinedEntities(value: string): string {
+  let decoded = '';
+  let cursor = 0;
+  while (cursor < value.length) {
+    const ampersand = value.indexOf('&', cursor);
+    if (ampersand === -1) return decoded + value.slice(cursor);
+    decoded += value.slice(cursor, ampersand);
+    const semicolon = value.indexOf(';', ampersand + 1);
+    if (semicolon === -1) throw new Error('Unterminated XML entity reference.');
+    const entityName = value.slice(ampersand + 1, semicolon);
+    const replacement = predefinedEntities.get(entityName);
+    if (replacement === undefined) throw new Error('Unsupported XML entity reference.');
+    decoded += replacement;
+    cursor = semicolon + 1;
+  }
+  return decoded;
+}
+
+function parseStartTag(value: string): StartTag {
+  let body = value.trim();
+  const selfClosing = body.endsWith('/');
+  if (selfClosing) body = body.slice(0, -1).trimEnd();
+
+  let cursor = skipWhitespace(body, 0);
+  const elementName = readXmlName(body, cursor);
+  cursor = elementName.end;
+  const attributes = new Map<string, string>();
+
+  while (cursor < body.length) {
+    const next = skipWhitespace(body, cursor);
+    if (next === cursor) throw new Error('XML attributes must be separated by whitespace.');
+    cursor = next;
+    if (cursor >= body.length) break;
+
+    const attributeName = readXmlName(body, cursor);
+    cursor = skipWhitespace(body, attributeName.end);
+    if (body[cursor] !== '=') throw new Error('XML attribute is missing an equals sign.');
+    cursor = skipWhitespace(body, cursor + 1);
+    const quote = body[cursor];
+    if (quote !== '"' && quote !== "'") throw new Error('XML attributes must be quoted.');
+    const endQuote = body.indexOf(quote, cursor + 1);
+    if (endQuote === -1) throw new Error('XML attribute quote is not closed.');
+    if (attributes.has(attributeName.name)) throw new Error('Duplicate XML attribute.');
+    attributes.set(attributeName.name, decodePredefinedEntities(body.slice(cursor + 1, endQuote)));
+    cursor = endQuote + 1;
+  }
+
+  return { name: elementName.name, attributes, selfClosing };
+}
+
+function findTagEnd(content: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let cursor = start; cursor < content.length; cursor += 1) {
+    const character = content[cursor];
+    if (quote) {
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '>') return cursor;
+  }
+  throw new Error('XML tag is not closed.');
+}
+
+function rejectExecutableElement(name: string): void {
+  const normalized = name.toLowerCase();
+  if (normalized === 'include' || normalized.endsWith(':include') || normalized.startsWith('xi:')) {
+    throw new Error('XInclude is not supported.');
+  }
+}
+
+function parseXml(content: string): XmlElement {
+  const stack: XmlElement[] = [];
+  let root: XmlElement | undefined;
+  let cursor = 0;
+  let hasXmlDeclaration = false;
+
+  while (cursor < content.length) {
+    if (content[cursor] !== '<') {
+      const nextTag = content.indexOf('<', cursor);
+      const end = nextTag === -1 ? content.length : nextTag;
+      const text = decodePredefinedEntities(content.slice(cursor, end));
+      const current = stack.at(-1);
+      if (current) current.directText.push(text);
+      else if (text.trim().length > 0) throw new Error('Text is not allowed outside the root.');
+      cursor = end;
+      continue;
+    }
+
+    if (content.startsWith('<!--', cursor)) {
+      const commentEnd = content.indexOf('-->', cursor + 4);
+      if (commentEnd === -1) throw new Error('XML comment is not closed.');
+      cursor = commentEnd + 3;
+      continue;
+    }
+
+    if (content.startsWith('<?', cursor)) {
+      const instructionEnd = content.indexOf('?>', cursor + 2);
+      if (instructionEnd === -1) throw new Error('XML processing instruction is not closed.');
+      const instruction = content.slice(cursor + 2, instructionEnd).trim();
+      if (
+        hasXmlDeclaration ||
+        root !== undefined ||
+        !/^xml(?:\s|$)/i.test(instruction) ||
+        /^xml-/i.test(instruction)
+      ) {
+        throw new Error('XML processing instructions are not supported.');
+      }
+      hasXmlDeclaration = true;
+      cursor = instructionEnd + 2;
+      continue;
+    }
+
+    if (content.startsWith('<!', cursor)) {
+      throw new Error('DTD, ENTITY, CDATA, and other declarations are not supported.');
+    }
+
+    const tagEnd = findTagEnd(content, cursor + 1);
+    const tagBody = content.slice(cursor + 1, tagEnd);
+    const trimmedTagBody = tagBody.trim();
+    if (trimmedTagBody.startsWith('/')) {
+      const closing = trimmedTagBody.slice(1).trim();
+      const closingName = readXmlName(closing, 0);
+      if (skipWhitespace(closing, closingName.end) !== closing.length) {
+        throw new Error('Invalid closing XML tag.');
+      }
+      const current = stack.pop();
+      if (!current || current.name !== closingName.name) {
+        throw new Error('Mismatched closing XML tag.');
+      }
+    } else {
+      const tag = parseStartTag(tagBody);
+      rejectExecutableElement(tag.name);
+      const element: XmlElement = {
+        name: tag.name,
+        attributes: tag.attributes,
+        children: [],
+        directText: [],
+        index: cursor,
+      };
+      const parent = stack.at(-1);
+      if (parent) parent.children.push(element);
+      else {
+        if (root) throw new Error('Multiple XML root elements are not supported.');
+        root = element;
+      }
+      if (!tag.selfClosing) stack.push(element);
+    }
+    cursor = tagEnd + 1;
+  }
+
+  if (stack.length > 0 || !root) throw new Error('XML document is incomplete.');
+  return root;
+}
+
+function booleanAttribute(element: XmlElement, name: string): boolean | undefined {
+  const value = element.attributes.get(name);
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  throw new Error('Invalid boolean XML attribute.');
+}
+
+function directChildren(element: XmlElement, name: string): XmlElement[] {
+  return element.children.filter((child) => child.name === name);
 }
 
 function safeDomain(value: string): string | undefined {
@@ -66,68 +261,99 @@ function safeDomain(value: string): string | undefined {
   return /^[a-z0-9.-]+$/.test(domain) ? domain : undefined;
 }
 
+function analyzeDomainConfig(
+  element: XmlElement,
+  inheritedCleartext: boolean | undefined,
+  document: XmlDocument,
+  location: string,
+  checks: Check[]
+): void {
+  const effectiveCleartext =
+    booleanAttribute(element, 'cleartextTrafficPermitted') ?? inheritedCleartext;
+  const seenDomains = new Set<string>();
+
+  for (const domainElement of directChildren(element, 'domain')) {
+    if (domainElement.children.length > 0) throw new Error('Nested domain content is unsupported.');
+    const domain = safeDomain(domainElement.directText.join(''));
+    if (!domain) throw new Error('Invalid domain value.');
+    const includeSubdomains = booleanAttribute(domainElement, 'includeSubdomains') ?? false;
+    const domainKey = `${domain}\u0000${String(includeSubdomains)}`;
+    if (seenDomains.has(domainKey)) continue;
+    seenDomains.add(domainKey);
+
+    if (effectiveCleartext === true) {
+      checks.push({
+        id: RULE_IDS.androidNetworkSecurityCleartext,
+        status: 'BLOCKED',
+        message: 'A release network security domain-config permits cleartext traffic.',
+        location: `${location}:${lineAt(document.content, domainElement.index)}`,
+        details: { domain, includeSubdomains },
+      });
+    }
+  }
+
+  for (const child of directChildren(element, 'domain-config')) {
+    analyzeDomainConfig(child, effectiveCleartext, document, location, checks);
+  }
+}
+
 function inspectNetworkConfig(root: string, document: XmlDocument): Check[] {
-  const checks: Check[] = [];
-  const analysis = analyzableXml(document.content);
   const location = safeRelative(root, document.path);
+  try {
+    const config = parseXml(document.content);
+    if (config.name !== 'network-security-config') {
+      throw new Error('Unexpected network security XML root.');
+    }
 
-  for (const match of analysis.content.matchAll(/<base-config\b[^>]*>/gi)) {
-    if (match.index === undefined || !cleartextAttribute(match[0])) continue;
-    checks.push({
-      id: RULE_IDS.androidNetworkSecurityCleartext,
-      status: 'BLOCKED',
-      message: 'Release network security base-config permits cleartext traffic.',
-      location: `${location}:${lineAt(document.content, match.index)}`,
-    });
-  }
+    const checks: Check[] = [];
+    const baseConfigs = directChildren(config, 'base-config');
+    if (baseConfigs.length > 1) throw new Error('Multiple base-config elements are unsupported.');
+    const baseConfig = baseConfigs[0];
+    const baseCleartext = baseConfig
+      ? booleanAttribute(baseConfig, 'cleartextTrafficPermitted')
+      : undefined;
 
-  for (const match of analysis.content.matchAll(
-    /<domain-config\b[^>]*>[\s\S]*?<\/domain-config\s*>/gi
-  )) {
-    if (match.index === undefined) continue;
-    const startTag = /^<domain-config\b[^>]*>/i.exec(match[0])?.[0];
-    if (!startTag || !cleartextAttribute(startTag)) continue;
-    const domains = [...match[0].matchAll(/<domain\b[^>]*>([^<]+)<\/domain\s*>/gi)]
-      .map((domainMatch) => safeDomain(domainMatch[1] ?? ''))
-      .filter((domain): domain is string => domain !== undefined);
-    const uniqueDomains = [...new Set(domains)].sort();
-    if (uniqueDomains.length === 0) {
+    if (baseConfig && baseCleartext === true) {
       checks.push({
         id: RULE_IDS.androidNetworkSecurityCleartext,
         status: 'BLOCKED',
-        message: 'A release network security domain-config permits cleartext traffic.',
-        location: `${location}:${lineAt(document.content, match.index)}`,
+        message: 'Release network security base-config permits cleartext traffic.',
+        location: `${location}:${lineAt(document.content, baseConfig.index)}`,
       });
-      continue;
     }
-    for (const domain of uniqueDomains) {
+
+    for (const domainConfig of directChildren(config, 'domain-config')) {
+      analyzeDomainConfig(domainConfig, baseCleartext, document, location, checks);
+    }
+
+    if (checks.length === 0) {
       checks.push({
         id: RULE_IDS.androidNetworkSecurityCleartext,
-        status: 'BLOCKED',
-        message: 'A release network security domain-config permits cleartext traffic.',
-        location: `${location}:${lineAt(document.content, match.index)}`,
-        details: { domain },
+        status: 'PASS',
+        message: 'Release network security configuration does not explicitly permit cleartext.',
+        location,
       });
     }
-  }
 
-  if (checks.length === 0) {
-    checks.push({
-      id: RULE_IDS.androidNetworkSecurityCleartext,
-      status: 'PASS',
-      message: 'Release network security configuration does not explicitly permit cleartext.',
-      location,
-    });
+    if (directChildren(config, 'debug-overrides').length > 0) {
+      checks.push({
+        id: 'android.network-security.debug-overrides',
+        status: 'PASS',
+        message: 'Debug-only network security overrides were not treated as a release failure.',
+        location,
+      });
+    }
+    return checks;
+  } catch {
+    return [
+      {
+        id: 'android.network-security.xml',
+        status: 'TOOL_ERROR',
+        message: 'The release network security XML could not be safely analyzed.',
+        location,
+      },
+    ];
   }
-  if (analysis.hasDebugOverrides) {
-    checks.push({
-      id: 'android.network-security.debug-overrides',
-      status: 'PASS',
-      message: 'Debug-only network security overrides were not treated as a release failure.',
-      location,
-    });
-  }
-  return checks;
 }
 
 export async function inspectAndroidNetworkSecurity(root: string): Promise<Check[]> {
