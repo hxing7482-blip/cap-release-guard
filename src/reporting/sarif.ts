@@ -1,4 +1,4 @@
-import { basename, posix, win32 } from 'node:path';
+import { posix, win32 } from 'node:path';
 import type { AuditResult, Check } from '../types.js';
 import { VERSION } from '../version.js';
 
@@ -15,8 +15,11 @@ function levelFor(check: Check): SarifLevel {
 
 function safeArtifactUri(value: string): string {
   const normalized = value.replaceAll('\\', '/');
-  if (win32.isAbsolute(value) || posix.isAbsolute(normalized)) {
-    return encodeURI(basename(value));
+  if (win32.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value)) {
+    return encodeURI(win32.basename(value));
+  }
+  if (posix.isAbsolute(normalized)) {
+    return encodeURI(posix.basename(normalized));
   }
 
   const parts = normalized

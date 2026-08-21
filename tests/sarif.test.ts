@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderSarif } from '../src/reporting/sarif.js';
 import { createResult, toolError } from '../src/rules/result.js';
@@ -73,18 +72,18 @@ describe('SARIF reporting', () => {
   });
 
   it('does not leak an absolute Windows path', () => {
-    const absoluteLocation = `${resolve('synthetic', 'AndroidManifest.xml')}:4`;
+    const absolutePath = ['C:', 'synthetic', 'project', 'AndroidManifest.xml'].join('\\');
     const output = renderSarif(
       createResult([
         {
           id: 'sample.absolute',
           status: 'WARN',
           message: 'Synthetic path.',
-          location: absoluteLocation,
+          location: `${absolutePath}:4`,
         },
       ])
     );
-    expect(output).not.toContain(resolve('synthetic'));
+    expect(output).not.toContain(absolutePath);
     expect(output).toContain('AndroidManifest.xml');
   });
 

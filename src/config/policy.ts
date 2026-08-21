@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, extname, join, relative, resolve } from 'node:path';
 import { createResult } from '../rules/result.js';
 import { canonicalRuleId, type ConfigurableRuleId } from '../rules/ids.js';
 import type { AuditResult, Check, Status } from '../types.js';
@@ -138,6 +138,16 @@ export async function resolveReleasePolicy(
   const selectedPath = options.configPath ? resolve(options.cwd, options.configPath) : implicitPath;
   const explicit = options.configPath !== undefined;
   const location = safeLocation(options.cwd, selectedPath);
+  if (explicit && extname(selectedPath).toLowerCase() !== '.json') {
+    return {
+      ok: false,
+      result: configError(
+        'config.path',
+        'Configuration path must reference a JSON file.',
+        location
+      ),
+    };
+  }
 
   let policy: ReleasePolicy = { endpointAllow: [], endpointDeny: [], rules: {} };
   if (explicit || existsSync(selectedPath)) {

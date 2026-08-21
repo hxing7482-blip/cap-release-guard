@@ -53,7 +53,7 @@ cap-release-guard endpoints ./dist \
 ## Validation and safety
 
 - Invalid JSON, an unsupported schema version, unknown properties, unknown rule IDs, or invalid severity values produce `TOOL_ERROR`.
-- The configuration format is JSON only. JavaScript and TypeScript configuration files are not supported or executed.
+- The configuration format is JSON only. Explicit config paths must end in .json; JavaScript, TypeScript, environment files, and other formats are rejected before reading.
 - Environment-variable and secret substitution are not supported.
 - The loader does not read `.env` files.
 - Endpoint patterns are case-insensitive regular expressions. Invalid expressions fall back to case-insensitive substring matching.

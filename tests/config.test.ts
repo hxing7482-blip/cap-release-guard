@@ -71,6 +71,20 @@ describe('release policy configuration', () => {
     }
   });
 
+  it('rejects a non-JSON config path before reading it', async () => {
+    const directory = await temporaryProject();
+    await writeFile(join(directory, '.env'), 'SYNTHETIC_VALUE=not-used');
+    const resolution = await resolveReleasePolicy({ cwd: directory, configPath: '.env' });
+    expect(resolution.ok).toBe(false);
+    if (!resolution.ok) {
+      expect(resolution.result.checks[0]).toMatchObject({
+        id: 'config.path',
+        status: 'TOOL_ERROR',
+        location: '.env',
+      });
+    }
+  });
+
   it('preserves v0.1 defaults when no configuration exists', async () => {
     const directory = await temporaryProject();
     const resolution = await resolveReleasePolicy({ cwd: directory });
