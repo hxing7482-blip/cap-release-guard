@@ -17,7 +17,7 @@ Catch unsafe Android and Capacitor release mistakes before they ship.
 
 ## Project status
 
-`v0.1.0` is published on npm. The project is early-stage, actively maintained, and evolving through public, reviewable releases. Public-safe issues and pull requests are welcome.
+`v0.2.0` is published on npm. The project is early-stage, actively maintained, and evolving through public, reviewable releases. Public-safe issues and pull requests are welcome.
 
 **Primary maintainer:** [@hxing7482-blip](https://github.com/hxing7482-blip)
 
