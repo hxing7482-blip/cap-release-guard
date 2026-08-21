@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { RULE_IDS } from '../rules/ids.js';
 import { createResult, toolError } from '../rules/result.js';
 import type { AuditResult, Check } from '../types.js';
 import { normalizeFingerprint } from '../utils/hash.js';
@@ -70,7 +71,7 @@ export async function compareApkAndCertificate(
   const signer = parseApkSignerOutput(`${verification.stdout}\n${verification.stderr}`);
   const comparison = compareCertificateIdentity(signer, certificate);
   const check: Check = {
-    id: 'compare.certificate-identity',
+    id: comparison.outcome === 'MATCH' ? 'certificate.match' : RULE_IDS.certificateMismatch,
     status: comparison.outcome === 'MATCH' ? 'PASS' : 'BLOCKED',
     message: comparison.outcome,
     details: {

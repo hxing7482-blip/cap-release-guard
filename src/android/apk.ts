@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { RULE_IDS } from '../rules/ids.js';
 import { createResult, toolError } from '../rules/result.js';
 import type { AuditResult, Check, SafeDetailValue } from '../types.js';
 import { discoverAndroidTools, runTool, type AndroidTools } from '../utils/process.js';
@@ -54,7 +55,7 @@ export async function analyzeApk(
       details: metadataDetails(metadata),
     });
     checks.push({
-      id: 'apk.debuggable',
+      id: RULE_IDS.androidDebuggable,
       status:
         metadata.debuggable === true ? 'BLOCKED' : metadata.debuggable === false ? 'PASS' : 'WARN',
       message:
@@ -101,7 +102,7 @@ export async function analyzeApk(
     },
   });
   checks.push({
-    id: 'apk.debug-signer',
+    id: RULE_IDS.androidDebugSigner,
     status: isAndroidDebugSigner(signer.subject) ? 'BLOCKED' : 'PASS',
     message: isAndroidDebugSigner(signer.subject)
       ? 'Android Debug signer certificate detected.'

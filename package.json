@@ -1,6 +1,6 @@
 {
   "name": "cap-release-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Catch unsafe Android and Capacitor release mistakes before they ship.",
   "type": "module",
   "license": "Apache-2.0",

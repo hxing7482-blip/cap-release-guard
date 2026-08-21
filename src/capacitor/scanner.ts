@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { inspectAndroidNetworkSecurity } from '../android/network-security.js';
+import { RULE_IDS } from '../rules/ids.js';
 import { createResult } from '../rules/result.js';
 import type { AuditResult, Check } from '../types.js';
 
@@ -126,7 +128,9 @@ export async function scanCapacitorProject(root: string): Promise<AuditResult> {
         location,
       });
       checks.push({
-        id: 'android.release-signing-binding',
+        id: releaseSigningBinding
+          ? 'android.signing.release'
+          : RULE_IDS.androidSigningMissingRelease,
         status: releaseSigningBinding ? 'PASS' : 'WARN',
         message: releaseSigningBinding
           ? 'Release build type references a signing configuration.'
@@ -143,6 +147,10 @@ export async function scanCapacitorProject(root: string): Promise<AuditResult> {
         });
       }
     }
+  }
+
+  if (androidExists) {
+    checks.push(...(await inspectAndroidNetworkSecurity(root)));
   }
 
   const applicationId = gradleApplicationId ?? capacitorAppId;

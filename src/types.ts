@@ -23,4 +23,4 @@ export interface AuditResult {
   summary: Summary;
 }
 
-export type OutputFormat = 'text' | 'json' | 'markdown';
+export type OutputFormat = 'text' | 'json' | 'markdown' | 'sarif';
