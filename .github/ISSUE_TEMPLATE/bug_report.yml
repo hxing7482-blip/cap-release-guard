@@ -1,0 +1,27 @@
+name: Bug report
+description: Report reproducible behavior using public-safe data only
+title: '[Bug]: '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach private APKs, signing material, credentials, or confidential paths.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the issue using a synthetic reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: cap-release-guard version
+    validations:
+      required: true
