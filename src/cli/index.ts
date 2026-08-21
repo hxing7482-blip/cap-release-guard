@@ -9,6 +9,7 @@ import { scanEndpoints } from '../endpoints/scanner.js';
 import { render, isOutputFormat } from '../reporting/index.js';
 import { exitCodeFor, toolError } from '../rules/result.js';
 import type { AuditResult, OutputFormat } from '../types.js';
+import { VERSION } from '../version.js';
 
 interface FormatOptions {
   format: string;
@@ -17,7 +18,7 @@ interface FormatOptions {
 function output(result: AuditResult, requestedFormat: string): void {
   const format: OutputFormat = isOutputFormat(requestedFormat) ? requestedFormat : 'text';
   if (!isOutputFormat(requestedFormat)) {
-    result = toolError('cli.format', 'Format must be text, json, or markdown.');
+    result = toolError('cli.format', 'Format must be text, json, markdown, or sarif.');
   }
   process.stdout.write(`${render(result, format)}\n`);
   process.exitCode = exitCodeFor(result.status);
@@ -35,7 +36,11 @@ async function runSafely(
 }
 
 function addFormatOption(command: Command): Command {
-  return command.option('--format <format>', 'Output format: text, json, or markdown', 'text');
+  return command.option(
+    '--format <format>',
+    'Output format: text, json, markdown, or sarif',
+    'text'
+  );
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -46,7 +51,7 @@ const program = new Command();
 program
   .name('cap-release-guard')
   .description('Catch unsafe Android and Capacitor release mistakes before they ship.')
-  .version('0.1.0');
+  .version(VERSION);
 
 addFormatOption(
   program.command('scan').description('Scan the current Capacitor and Android project')
