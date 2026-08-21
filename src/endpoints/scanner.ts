@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { relative } from 'node:path';
 import { createResult, toolError } from '../rules/result.js';
+import { RULE_IDS } from '../rules/ids.js';
 import type { AuditResult, Check, Status } from '../types.js';
 import { collectTextFiles } from '../utils/files.js';
 
@@ -10,6 +11,11 @@ export interface EndpointFinding {
   rule: string;
   context: string;
   severity: Extract<Status, 'WARN' | 'BLOCKED'>;
+}
+
+export interface EndpointPatternPolicy {
+  allow?: readonly string[];
+  deny?: readonly string[];
 }
 
 interface Candidate {
@@ -26,7 +32,7 @@ const safeHttpPrefixes = [
   'http://xml.org/',
 ];
 
-function isAllowed(value: string, filename: string, patterns: readonly string[]): boolean {
+function patternMatches(value: string, filename: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => {
     try {
       const expression = new RegExp(pattern, 'i');
@@ -51,22 +57,22 @@ function classifyUrl(url: string, index: number): Candidate[] {
   }
 
   if (['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(hostname)) {
-    findings.push({ value: url, index, rule: 'local-endpoint-url', severity: 'BLOCKED' });
+    findings.push({ value: url, index, rule: RULE_IDS.endpointLocalhost, severity: 'BLOCKED' });
   }
   if (hostname.includes('ngrok') || hostname.endsWith('.trycloudflare.com')) {
-    findings.push({ value: url, index, rule: 'temporary-tunnel-endpoint', severity: 'BLOCKED' });
+    findings.push({ value: url, index, rule: RULE_IDS.endpointTunnel, severity: 'BLOCKED' });
   }
   if (hostname.endsWith('.test') || hostname.endsWith('.local')) {
-    findings.push({ value: url, index, rule: 'non-production-domain', severity: 'WARN' });
+    findings.push({ value: url, index, rule: RULE_IDS.endpointNonProduction, severity: 'WARN' });
   }
   if (/(^|[.-])(uat|research)([.-]|$)/i.test(hostname)) {
-    findings.push({ value: url, index, rule: 'non-production-environment', severity: 'WARN' });
+    findings.push({ value: url, index, rule: RULE_IDS.endpointNonProduction, severity: 'WARN' });
   }
   if (
     normalized.startsWith('http://') &&
     !safeHttpPrefixes.some((prefix) => normalized.startsWith(prefix))
   ) {
-    findings.push({ value: url, index, rule: 'cleartext-http-endpoint', severity: 'BLOCKED' });
+    findings.push({ value: url, index, rule: RULE_IDS.endpointCleartextHttp, severity: 'BLOCKED' });
   }
   return findings;
 }
@@ -87,15 +93,34 @@ function safeContext(content: string, index: number): string {
     .slice(0, 180);
 }
 
+function normalizePolicy(
+  policy: readonly string[] | EndpointPatternPolicy
+): Required<EndpointPatternPolicy> {
+  if (Array.isArray(policy)) return { allow: policy, deny: [] };
+  const options = policy as EndpointPatternPolicy;
+  return { allow: options.allow ?? [], deny: options.deny ?? [] };
+}
+
 export function scanEndpointContent(
   content: string,
   filename: string,
-  allowPatterns: readonly string[] = []
+  policy: readonly string[] | EndpointPatternPolicy = []
 ): EndpointFinding[] {
+  const { allow, deny } = normalizePolicy(policy);
   const candidates: Candidate[] = [];
   const urlPattern = /https?:\/\/[^\s'"`<>\\)\]]+/gi;
   for (const match of content.matchAll(urlPattern)) {
     if (match.index === undefined) continue;
+    if (patternMatches(match[0], filename, deny)) {
+      candidates.push({
+        value: match[0],
+        index: match.index,
+        rule: RULE_IDS.endpointPolicyDeny,
+        severity: 'BLOCKED',
+      });
+      continue;
+    }
+    if (patternMatches(match[0], filename, allow)) continue;
     candidates.push(...classifyUrl(match[0], match.index));
   }
 
@@ -103,10 +128,12 @@ export function scanEndpointContent(
     /\b(?:host|hostname|baseUrl|apiUrl|server)\s*[:=]\s*['"]?(localhost|127\.0\.0\.1|0\.0\.0\.0)(?=['"\s,;}])/gi;
   for (const match of content.matchAll(hostAssignment)) {
     if (match.index === undefined) continue;
+    const denied = patternMatches(match[0], filename, deny);
+    if (!denied && patternMatches(match[0], filename, allow)) continue;
     candidates.push({
       value: match[0],
       index: match.index,
-      rule: 'local-host-configuration',
+      rule: denied ? RULE_IDS.endpointPolicyDeny : RULE_IDS.endpointLocalhost,
       severity: 'BLOCKED',
     });
   }
@@ -114,18 +141,19 @@ export function scanEndpointContent(
   const tunnelPhrase = /\bcloudflare\s+tunnel\b/gi;
   for (const match of content.matchAll(tunnelPhrase)) {
     if (match.index === undefined) continue;
+    const denied = patternMatches(match[0], filename, deny);
+    if (!denied && patternMatches(match[0], filename, allow)) continue;
     candidates.push({
       value: match[0],
       index: match.index,
-      rule: 'temporary-tunnel-reference',
-      severity: 'WARN',
+      rule: denied ? RULE_IDS.endpointPolicyDeny : RULE_IDS.endpointTunnel,
+      severity: denied ? 'BLOCKED' : 'WARN',
     });
   }
 
   const seen = new Set<string>();
   const findings: EndpointFinding[] = [];
   for (const candidate of candidates) {
-    if (isAllowed(candidate.value, filename, allowPatterns)) continue;
     const line = lineNumberAt(content, candidate.index);
     const key = `${candidate.rule}:${line}:${candidate.value}`;
     if (seen.has(key)) continue;
@@ -143,7 +171,7 @@ export function scanEndpointContent(
 
 export async function scanEndpoints(
   targetPath: string,
-  allowPatterns: readonly string[] = []
+  policy: readonly string[] | EndpointPatternPolicy = []
 ): Promise<AuditResult> {
   try {
     await stat(targetPath);
@@ -172,10 +200,11 @@ export async function scanEndpoints(
       });
       continue;
     }
-    const displayName = relative(targetPath, file) || file.split(/[\\/]/).pop() || 'input';
-    for (const finding of scanEndpointContent(content, displayName, allowPatterns)) {
+    const displayName =
+      relative(targetPath, file).replaceAll('\\', '/') || file.split(/[\\/]/).pop() || 'input';
+    for (const finding of scanEndpointContent(content, displayName, policy)) {
       checks.push({
-        id: `endpoints.${finding.rule}`,
+        id: finding.rule,
         status: finding.severity,
         message: 'Potential non-production endpoint detected.',
         location: `${finding.filename}:${finding.line}`,
