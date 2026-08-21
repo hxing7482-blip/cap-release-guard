@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- SARIF output.
+- Project release policy configuration.
+- Android network-security checks.
+
 ## [0.1.0] - 2026-08-21
 
 ### Added
